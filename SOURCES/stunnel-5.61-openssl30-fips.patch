@@ -1,0 +1,19 @@
+tests: Adapt to OpenSSL 3.x FIPS mode
+
+In OpenSSL 3.0 with FIPS enabled, this test no longer fails with
+a human-readable error message (such as "no ciphers available"), but
+instead causes an internal error. Extend the success regex list to also
+accept this result.
+diff -up stunnel-5.61/tests/plugins/p11_fips_cipher.py.openssl30 stunnel-5.61/tests/plugins/p11_fips_cipher.py
+--- stunnel-5.61/tests/plugins/p11_fips_cipher.py.openssl30	2022-01-12 15:15:03.211690650 +0100
++++ stunnel-5.61/tests/plugins/p11_fips_cipher.py	2022-01-12 15:15:20.937008173 +0100
+@@ -91,7 +91,8 @@ class FailureCiphersuitesFIPS(StunnelTes
+         self.events.count = 1
+         self.events.success = [
+             "disabled for FIPS",
+-            "no ciphers available"
++            "no ciphers available",
++            "TLS alert \\(write\\): fatal: internal error"
+         ]
+         self.events.failure = [
+             "peer did not return a certificate",
