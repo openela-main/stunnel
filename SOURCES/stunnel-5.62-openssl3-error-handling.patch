@@ -1,0 +1,140 @@
+From 6baa5762ea5edb192ec003333d62b1d0e56509bf Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Micha=C5=82=20Trojnara?= <Michal.Trojnara@stunnel.org>
+Date: Sun, 11 Sep 2022 23:52:18 +0200
+Subject: [PATCH] stunnel-5.66
+
+---
+ src/common.h |  6 +++++-
+ src/ctx.c    | 58 +++++++++++++++++++++++++++++++++++++++++++---------
+ 2 files changed, 53 insertions(+), 11 deletions(-)
+
+diff --git a/src/common.h b/src/common.h
+index bc37eb5..997e66e 100644
+--- a/src/common.h
++++ b/src/common.h
+@@ -491,7 +491,7 @@ extern char *sys_errlist[];
+ #include <openssl/dh.h>
+ #if OPENSSL_VERSION_NUMBER<0x10100000L
+ int DH_set0_pqg(DH *dh, BIGNUM *p, BIGNUM *q, BIGNUM *g);
+-#endif /* OpenSSL older than 1.1.0 */
++#endif /* OPENSSL_VERSION_NUMBER<0x10100000L */
+ #endif /* !defined(OPENSSL_NO_DH) */
+ #ifndef OPENSSL_NO_ENGINE
+ #include <openssl/engine.h>
+@@ -503,8 +503,12 @@ int DH_set0_pqg(DH *dh, BIGNUM *p, BIGNUM *q, BIGNUM *g);
+ /* not defined in public headers before OpenSSL 0.9.8 */
+ STACK_OF(SSL_COMP) *SSL_COMP_get_compression_methods(void);
+ #endif /* !defined(OPENSSL_NO_COMP) */
++#if OPENSSL_VERSION_NUMBER>=0x10101000L
++#include <openssl/storeerr.h>
++#endif /* OPENSSL_VERSION_NUMBER>=0x10101000L */
+ #if OPENSSL_VERSION_NUMBER>=0x30000000L
+ #include <openssl/provider.h>
++#include <openssl/proverr.h>
+ #endif /* OPENSSL_VERSION_NUMBER>=0x30000000L */
+ 
+ #ifndef OPENSSL_VERSION
+diff --git a/src/ctx.c b/src/ctx.c
+index a2202b7..cc0806c 100644
+--- a/src/ctx.c
++++ b/src/ctx.c
+@@ -1001,30 +1001,41 @@ NOEXPORT int ui_retry() {
+     unsigned long err=ERR_peek_error();
+ 
+     switch(ERR_GET_LIB(err)) {
+-    case ERR_LIB_ASN1:
+-        return 1;
+-    case ERR_LIB_PKCS12:
++    case ERR_LIB_EVP: /* 6 */
+         switch(ERR_GET_REASON(err)) {
+-        case PKCS12_R_MAC_VERIFY_FAILURE:
++        case EVP_R_BAD_DECRYPT:
+             return 1;
+         default:
++            s_log(LOG_ERR, "Unhandled ERR_LIB_EVP error reason: %d",
++                ERR_GET_REASON(err));
+             return 0;
+         }
+-    case ERR_LIB_EVP:
++    case ERR_LIB_PEM: /* 9 */
+         switch(ERR_GET_REASON(err)) {
+-        case EVP_R_BAD_DECRYPT:
++        case PEM_R_BAD_PASSWORD_READ:
++        case PEM_R_BAD_DECRYPT:
+             return 1;
+         default:
++            s_log(LOG_ERR, "Unhandled ERR_LIB_PEM error reason: %d",
++                ERR_GET_REASON(err));
+             return 0;
+         }
+-    case ERR_LIB_PEM:
++    case ERR_LIB_ASN1: /* 13 */
++        return 1;
++    case ERR_LIB_PKCS12: /* 35 */
+         switch(ERR_GET_REASON(err)) {
+-        case PEM_R_BAD_PASSWORD_READ:
++        case PKCS12_R_MAC_VERIFY_FAILURE:
+             return 1;
+         default:
++            s_log(LOG_ERR, "Unhandled ERR_LIB_PKCS12 error reason: %d",
++                ERR_GET_REASON(err));
+             return 0;
+         }
+-    case ERR_LIB_UI:
++#ifdef ERR_LIB_DSO /* 37 */
++    case ERR_LIB_DSO:
++        return 1;
++#endif
++    case ERR_LIB_UI: /* 40 */
+         switch(ERR_GET_REASON(err)) {
+         case UI_R_RESULT_TOO_LARGE:
+         case UI_R_RESULT_TOO_SMALL:
+@@ -1033,17 +1044,44 @@ NOEXPORT int ui_retry() {
+ #endif
+             return 1;
+         default:
++            s_log(LOG_ERR, "Unhandled ERR_LIB_UI error reason: %d",
++                ERR_GET_REASON(err));
++            return 0;
++        }
++#ifdef ERR_LIB_OSSL_STORE
++    case ERR_LIB_OSSL_STORE: /* 44 - added in OpenSSL 1.1.1 */
++        switch(ERR_GET_REASON(err)) {
++        case OSSL_STORE_R_BAD_PASSWORD_READ:
++            return 1;
++        default:
++            s_log(LOG_ERR, "Unhandled ERR_LIB_OSSL_STORE error reason: %d",
++                ERR_GET_REASON(err));
++            return 0;
++        }
++#endif
++#ifdef ERR_LIB_PROV
++    case ERR_LIB_PROV: /* 57 - added in OpenSSL 3.0 */
++        switch(ERR_GET_REASON(err)) {
++        case PROV_R_BAD_DECRYPT:
++            return 1;
++        default:
++            s_log(LOG_ERR, "Unhandled ERR_LIB_PROV error reason: %d",
++                ERR_GET_REASON(err));
+             return 0;
+         }
+-    case ERR_LIB_USER: /* PKCS#11 hacks */
++#endif
++    case ERR_LIB_USER: /* 128 - PKCS#11 hacks */
+         switch(ERR_GET_REASON(err)) {
+         case 7UL: /* CKR_ARGUMENTS_BAD */
+         case 0xa0UL: /* CKR_PIN_INCORRECT */
+             return 1;
+         default:
++            s_log(LOG_ERR, "Unhandled ERR_LIB_USER error reason: %d",
++                ERR_GET_REASON(err));
+             return 0;
+         }
+     default:
++        s_log(LOG_ERR, "Unhandled error library: %d", ERR_GET_LIB(err));
+         return 0;
+     }
+ }
+-- 
+2.38.1
+
