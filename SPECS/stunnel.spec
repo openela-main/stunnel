@@ -1,7 +1,7 @@
 # Do not generate provides for private libraries
 %global __provides_exclude_from ^%{_libdir}/stunnel/.*$
 
-%if 0%{?fedora} > 27 || 0%{?rhel} > 7
+%if 0%{?fedora} || 0%{?rhel} > 7
 %bcond_with libwrap
 %else
 %bcond_without libwrap
@@ -9,8 +9,8 @@
 
 Summary: A TLS-encrypting socket wrapper
 Name: stunnel
-Version: 5.62
-Release: 3%{?dist}
+Version: 5.71
+Release: 1%{?dist}
 License: GPLv2
 URL: https://www.stunnel.org/
 Source0: https://www.stunnel.org/downloads/stunnel-%{version}.tar.gz
@@ -21,18 +21,19 @@ Source4: stunnel-sfinger.conf
 Source5: pop3-redirect.xinetd
 Source6: stunnel-pop3s-client.conf
 Source7: stunnel@.service
+# Upstream release signing key
+# Upstream source is https://www.stunnel.org/pgp.asc; using a local URL because
+# the remote one makes packit source-git choke.
+Source99: pgp.asc
 Patch0: stunnel-5.50-authpriv.patch
 Patch1: stunnel-5.61-systemd-service.patch
-Patch3: stunnel-5.56-system-ciphers.patch
-Patch4: stunnel-5.56-coverity.patch
-Patch5: stunnel-5.61-default-tls-version.patch
+Patch3: stunnel-5.69-system-ciphers.patch
+Patch5: stunnel-5.69-default-tls-version.patch
 Patch6: stunnel-5.56-curves-doc-update.patch
-Patch7: stunnel-5.61-openssl30-fips.patch
-Patch8: stunnel-5.62-disabled-curves.patch
-Patch9: stunnel-5.62-openssl3-error-handling.patch
 # util-linux is needed for rename
 BuildRequires: make
 BuildRequires: gcc
+BuildRequires: gnupg2
 BuildRequires: openssl-devel, pkgconfig, util-linux
 BuildRequires: autoconf automake libtool
 %if %{with libwrap}
@@ -42,8 +43,8 @@ BuildRequires: /usr/bin/pod2man
 BuildRequires: /usr/bin/pod2html
 # build test requirements
 BuildRequires: /usr/bin/nc, /usr/bin/lsof, /usr/bin/ps
-BuildRequires: python3 openssl
-BuildRequires: systemd
+BuildRequires: python3 python3-cryptography openssl
+BuildRequires: systemd systemd-devel
 %{?systemd_requires}
 
 %description
@@ -53,16 +54,13 @@ to ordinary applications. For example, it can be used in
 conjunction with imapd to create a TLS secure IMAP server.
 
 %prep
+%{gpgverify} --keyring='%{SOURCE99}' --signature='%{SOURCE1}' --data='%{SOURCE0}'
 %setup -q
 %patch0 -p1 -b .authpriv
 %patch1 -p1 -b .systemd-service
 %patch3 -p1 -b .system-ciphers
-%patch4 -p1 -b .coverity
 %patch5 -p1 -b .default-tls-version
 %patch6 -p1 -b .curves-doc-update
-%patch7 -p1 -b .openssl30-fips
-%patch8 -p1 -b .disabled-curves
-%patch9 -p1 -b .openssl3-error-handling
 
 # Fix the stack protector flag
 sed -i 's/-fstack-protector/-fstack-protector-strong/' configure
@@ -80,6 +78,7 @@ fi
 %else
 --disable-libwrap \
 %endif
+	--with-bashcompdir=%{_datadir}/bash-completion/completions \
 	CPPFLAGS="-UPIDFILE -DPIDFILE='\"%{_localstatedir}/run/stunnel.pid\"'"
 make V=1 LDADD="-pie -Wl,-z,defs,-z,relro,-z,now"
 
@@ -95,11 +94,9 @@ for lang in pl ; do
 done
 mkdir srpm-docs
 cp %{SOURCE2} %{SOURCE3} %{SOURCE4} %{SOURCE5} %{SOURCE6} srpm-docs
-%if 0%{?fedora} >= 15 || 0%{?rhel} >= 7
 mkdir -p %{buildroot}%{_unitdir}
 cp %{buildroot}%{_datadir}/doc/stunnel/examples/%{name}.service %{buildroot}%{_unitdir}/%{name}.service
 cp %{SOURCE7} %{buildroot}%{_unitdir}/%{name}@.service
-%endif
 
 %check
 if ! make test; then
@@ -127,9 +124,7 @@ fi
 %lang(pl) %{_mandir}/pl/man8/stunnel.8*
 %dir %{_sysconfdir}/%{name}
 %exclude %{_sysconfdir}/stunnel/*
-%if 0%{?fedora} >= 15 || 0%{?rhel} >= 7
 %{_unitdir}/%{name}*.service
-%endif
 %{_datadir}/bash-completion/completions/%{name}.bash
 
 %post
@@ -144,6 +139,13 @@ fi
 %systemd_postun_with_restart %{name}.service
 
 %changelog
+* Thu Oct 05 2023 Clemens Lang <cllang@redhat.com> - 5.71-1
+- New upstream release 5.71
+  Resolves: RHEL-2468
+- Enable socket activation support
+- verify upstream source in %%prep
+- clean up stale conditionals
+
 * Thu Dec 08 2022 Clemens Lang <cllang@redhat.com> - 5.62-3
 - Fix use of encrypted key files and password retry with OpenSSL 3
   Resolves: rhbz#2151888
