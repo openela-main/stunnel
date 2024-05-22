@@ -1,0 +1,37 @@
+From 4ffcbcecaf901b13a36dba1e651cfc16e5242e5a Mon Sep 17 00:00:00 2001
+From: Clemens Lang <cllang@redhat.com>
+Date: Thu, 19 Oct 2023 14:41:54 +0200
+Subject: [PATCH] Preserve NO_TLSv1.[123] option compatibility
+
+On RHEL 8, stunnel used to support the NO_TLSv1.1, NO_TLSv1.2, and
+NO_TLSv1.3 values for the options directive. Since we do not break
+compatibility, preserve these options for customers that have them set.
+
+Related: RHEL-2340
+---
+ src/options.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/options.c b/src/options.c
+index a306c4c..c05692c 100644
+--- a/src/options.c
++++ b/src/options.c
+@@ -229,12 +229,15 @@ static const SSL_OPTION ssl_opts[] = {
+ #endif
+ #ifdef SSL_OP_NO_TLSv1_1
+     {"NO_TLSv1_1", SSL_OP_NO_TLSv1_1},
++    {"NO_TLSv1.1", SSL_OP_NO_TLSv1_1},
+ #endif
+ #ifdef SSL_OP_NO_TLSv1_2
+     {"NO_TLSv1_2", SSL_OP_NO_TLSv1_2},
++    {"NO_TLSv1.2", SSL_OP_NO_TLSv1_2},
+ #endif
+ #ifdef SSL_OP_NO_TLSv1_3
+     {"NO_TLSv1_3", SSL_OP_NO_TLSv1_3},
++    {"NO_TLSv1.3", SSL_OP_NO_TLSv1_3},
+ #endif
+ #ifdef SSL_OP_PKCS1_CHECK_1
+     {"PKCS1_CHECK_1", SSL_OP_PKCS1_CHECK_1},
+-- 
+2.41.0
+

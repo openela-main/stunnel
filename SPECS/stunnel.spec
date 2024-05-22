@@ -1,7 +1,7 @@
 # Do not generate provides for private libraries
 %global __provides_exclude_from ^%{_libdir}/stunnel/.*$
 
-%if 0%{?fedora} > 27 || 0%{?rhel} > 7
+%if 0%{?fedora} || 0%{?rhel} > 7
 %bcond_with libwrap
 %else
 %bcond_without libwrap
@@ -9,11 +9,11 @@
 
 Summary: A TLS-encrypting socket wrapper
 Name: stunnel
-Version: 5.56
-Release: 5%{?dist}
+Version: 5.71
+Release: 2%{?dist}
 License: GPLv2
 Group: Applications/Internet
-URL: http://www.stunnel.org/
+URL: https://www.stunnel.org/
 Source0: https://www.stunnel.org/downloads/stunnel-%{version}.tar.gz
 Source1: https://www.stunnel.org/downloads/stunnel-%{version}.tar.gz.asc
 Source2: Certificate-Creation
@@ -22,15 +22,20 @@ Source4: stunnel-sfinger.conf
 Source5: pop3-redirect.xinetd
 Source6: stunnel-pop3s-client.conf
 Source7: stunnel@.service
+# Upstream release signing key
+# Upstream source is https://www.stunnel.org/pgp.asc; using a local URL because
+# the remote one makes packit source-git choke.
+Source99: pgp.asc
 Patch0: stunnel-5.50-authpriv.patch
-Patch1: stunnel-5.50-systemd-service.patch
-Patch3: stunnel-5.56-system-ciphers.patch
-Patch4: stunnel-5.56-coverity.patch
-Patch5: stunnel-5.56-default-tls-version.patch
+Patch1: stunnel-5.61-systemd-service.patch
+Patch3: stunnel-5.69-system-ciphers.patch
+Patch5: stunnel-5.69-default-tls-version.patch
 Patch6: stunnel-5.56-curves-doc-update.patch
-Patch7: stunnel-5.56-verify-chain.patch
+Patch7: stunnel-5.71-Preserve-NO_TLSv1.-123-option-compatibility.patch
 # util-linux is needed for rename
+BuildRequires: make
 BuildRequires: gcc
+BuildRequires: gnupg2
 BuildRequires: openssl-devel, pkgconfig, util-linux
 BuildRequires: autoconf automake libtool
 %if %{with libwrap}
@@ -40,7 +45,8 @@ BuildRequires: /usr/bin/pod2man
 BuildRequires: /usr/bin/pod2html
 # build test requirements
 BuildRequires: /usr/bin/nc, /usr/bin/lsof, /usr/bin/ps
-BuildRequires: systemd
+BuildRequires: python3.11 python3.11-cryptography openssl
+BuildRequires: systemd systemd-devel
 %{?systemd_requires}
 
 %description
@@ -50,20 +56,17 @@ to ordinary applications. For example, it can be used in
 conjunction with imapd to create a TLS secure IMAP server.
 
 %prep
+%{gpgverify} --keyring='%{SOURCE99}' --signature='%{SOURCE1}' --data='%{SOURCE0}'
 %setup -q
 %patch0 -p1 -b .authpriv
 %patch1 -p1 -b .systemd-service
 %patch3 -p1 -b .system-ciphers
-%patch4 -p1 -b .coverity
 %patch5 -p1 -b .default-tls-version
 %patch6 -p1 -b .curves-doc-update
-%patch7 -p1 -b .verify-chain
+%patch7 -p1 -b .preserve-no-tlsv1-123-option-compatibility
 
-# Fix the configure script output for FIPS mode and stack protector flag
-sed -i '/yes).*result: no/,+1{s/result: no/result: yes/;s/as_echo "no"/as_echo "yes"/};s/-fstack-protector/-fstack-protector-strong/' configure
-
-# Fix a testcase with system-ciphers support
-sed -i '/client = yes/a \\  ciphers = PSK' tests/recipes/014_PSK_secrets
+# Fix the stack protector flag
+sed -i 's/-fstack-protector/-fstack-protector-strong/' configure
 
 %build
 #autoreconf -v
@@ -78,6 +81,7 @@ fi
 %else
 --disable-libwrap \
 %endif
+	--with-bashcompdir=%{_datadir}/bash-completion/completions \
 	CPPFLAGS="-UPIDFILE -DPIDFILE='\"%{_localstatedir}/run/stunnel.pid\"'"
 make V=1 LDADD="-pie -Wl,-z,defs,-z,relro,-z,now"
 
@@ -93,22 +97,18 @@ for lang in pl ; do
 done
 mkdir srpm-docs
 cp %{SOURCE2} %{SOURCE3} %{SOURCE4} %{SOURCE5} %{SOURCE6} srpm-docs
-%if 0%{?fedora} >= 15 || 0%{?rhel} >= 7
 mkdir -p %{buildroot}%{_unitdir}
 cp %{buildroot}%{_datadir}/doc/stunnel/examples/%{name}.service %{buildroot}%{_unitdir}/%{name}.service
 cp %{SOURCE7} %{buildroot}%{_unitdir}/%{name}@.service
-%endif
 
 %check
-# For unknown reason the 042_inetd test fails in Brew. The failure is not reproducible
-# in Fedora or normal RHEL-8 install.
-rm tests/recipes/042_inetd
-# We override the security policy as it is too strict for the tests.
-OPENSSL_SYSTEM_CIPHERS_OVERRIDE=xyz_nonexistent_file
-export OPENSSL_SYSTEM_CIPHERS_OVERRIDE
-OPENSSL_CONF=
-export OPENSSL_CONF
-make test
+if ! make test; then
+	for i in tests/logs/*.log; do
+		echo "$i":
+		cat "$i"
+	done
+	exit 1
+fi
 
 %files
 %{!?_licensedir:%global license %%doc}
@@ -127,9 +127,8 @@ make test
 %lang(pl) %{_mandir}/pl/man8/stunnel.8*
 %dir %{_sysconfdir}/%{name}
 %exclude %{_sysconfdir}/stunnel/*
-%if 0%{?fedora} >= 15 || 0%{?rhel} >= 7
 %{_unitdir}/%{name}*.service
-%endif
+%{_datadir}/bash-completion/completions/%{name}.bash
 
 %post
 /sbin/ldconfig
@@ -143,8 +142,19 @@ make test
 %systemd_postun_with_restart %{name}.service
 
 %changelog
-* Tue Feb 16 2021 Sahana Prasad <sahana@redhat.com> - 5.56-5
-- Fix CVE-2021-20230 stunnel: client certificate not
+* Thu Oct 19 2023 Clemens Lang <cllang@redhat.com> - 5.71-2
+- Restore support for the NO_TLSv1.[123] values for the option directive
+  Resolves: RHEL-2340
+
+* Thu Oct 05 2023 Clemens Lang <cllang@redhat.com> - 5.71-1
+- New upstream release 5.71
+  Resolves: RHEL-2340
+- Enable socket activation support
+- verify upstream source in %%prep
+- clean up stale conditionals
+
+* Tue Feb 23 2021 Sahana Prasad <sahana@redhat.com> - 5.56-5
+- Fixes CVE-2021-20230 stunnel: client certificate not
   correctly verified when redirect and verifyChain options are used.
 
 * Thu Apr 16 2020 Sahana Prasad <sahana@redhat.com> - 5.56-4
