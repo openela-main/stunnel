@@ -32,6 +32,7 @@ Patch3: stunnel-5.69-system-ciphers.patch
 Patch5: stunnel-5.69-default-tls-version.patch
 Patch6: stunnel-5.56-curves-doc-update.patch
 Patch7: stunnel-5.71-Preserve-NO_TLSv1.-123-option-compatibility.patch
+Patch8: stunnel-5.72-speed-up-loading-client-CA-list.patch
 # util-linux is needed for rename
 BuildRequires: make
 BuildRequires: gcc
@@ -64,6 +65,7 @@ conjunction with imapd to create a TLS secure IMAP server.
 %patch5 -p1 -b .default-tls-version
 %patch6 -p1 -b .curves-doc-update
 %patch7 -p1 -b .preserve-no-tlsv1-123-option-compatibility
+%patch8 -p1 -b .speed-up-loading-client-CA-list
 
 # Fix the stack protector flag
 sed -i 's/-fstack-protector/-fstack-protector-strong/' configure
@@ -142,6 +144,12 @@ fi
 %systemd_postun_with_restart %{name}.service
 
 %changelog
+* Wed Aug 07 2024 Clemens Lang <cllang@redhat.com> - 5.71-2
+- Speed up loading client CA list from CAfile
+  Resolves: RHEL-46411
+- Do not load all CAs in client mode to allow continued use of BEGIN TRUSTED CERTIFICATE format
+  Resolves: RHEL-50154
+
 * Thu Oct 19 2023 Clemens Lang <cllang@redhat.com> - 5.71-2
 - Restore support for the NO_TLSv1.[123] values for the option directive
   Resolves: RHEL-2340
