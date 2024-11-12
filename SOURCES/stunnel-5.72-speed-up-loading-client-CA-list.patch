@@ -1,0 +1,107 @@
+From 5f0b818f62720d5bd8b8c9c631604ddb4c992be7 Mon Sep 17 00:00:00 2001
+From: Clemens Lang <cllang@redhat.com>
+Date: Wed, 31 Jul 2024 15:35:24 +0200
+Subject: [PATCH] src/verify.c: Speed up loading client CA list
+
+Do not attempt to load and print all trusted CAs unless we need them to
+invoke SSL_CTX_set_client_CA_list(3). Loading all trusted CAs can be
+slow, especially if there are many. The CAdir format allows OpenSSL to
+only load them on demand, avoiding this overhead.
+
+Additionally, SSL_CTX_load_verify_locations(3) supports file formats
+that SSL_load_client_CA_file(3) and SSL_add_*_cert_subjects_to_stack(3)
+do not support, for example certificates in the BEGIN TRUSTED
+CERTIFICATE format. Valid configurations with older stunnel versions
+that point to such a file would otherwise needlessly start failing.
+
+Additionally, use SSL_load_client_CA_file(3) to load certificates from
+a file rather than SSL_add_file_cert_subjects_to_stack(3), since the
+former uses a hashtable for deduplication, but the latter relies on
+a sorted STACK_OF(X509_NAME). The sorting is exceptionally slow in
+OpenSSL, because the comparison function for X509_NAMEs converts them to
+DER involving a memory allocation, which is already expensive, but even
+more expensive when used with stunnel's custom allocator functions.
+
+An upstream PR openssl/openssl#25056 will eventually fix this, but it
+will take quite a while for this to arrive on users' systems, and it
+will likely not be backported into older affected versions of OpenSSL or
+their forks.
+
+Related: RHEL-50154
+Related: RHEL-46411
+Signed-off-by: Clemens Lang <cllang@redhat.com>
+---
+ src/verify.c | 42 ++++++++++++++++++++++++++++--------------
+ 1 file changed, 28 insertions(+), 14 deletions(-)
+
+diff --git a/src/verify.c b/src/verify.c
+index 56ab130..d1d3849 100644
+--- a/src/verify.c
++++ b/src/verify.c
+@@ -95,10 +95,35 @@ NOEXPORT int init_ca(SERVICE_OPTIONS *section) {
+         if(!SSL_CTX_load_verify_locations(section->ctx,
+                 section->ca_file, section->ca_dir)) {
+             sslerror("SSL_CTX_load_verify_locations");
++            return 1; /* FAILED */
+         }
+     }
+ 
+-    ca_dn=sk_X509_NAME_new_null();
++    /* Do not attempt to load and print all trusted CAs unless we need them to
++       invoke SSL_CTX_set_client_CA_list(3). Loading all trusted CAs can be
++       slow, especially if there are many. The CAdir format allows OpenSSL to
++       only load them on demand.
++       Additionally, SSL_CTX_load_verify_locations(3) supports file formats
++       that SSL_load_client_CA_file(3) and SSL_add_*_cert_subjects_to_stack(3)
++       do not support, for example certificates in the BEGIN TRUSTED
++       CERTIFICATE format. Valid configurations with older stunnel versions
++       that point to such a file would otherwise needlessly start failing. */
++    if(section->option.client)
++        return 0; /* OK */
++
++    if(section->ca_file)
++        /* SSL_load_client_CA_file is a lot faster than
++           SSL_add_file_cert_subjects_to_stack(). Use it for ca_file if
++           specified, then add the rest of the certificates to this stack. */
++        ca_dn=SSL_load_client_CA_file(section->ca_file);
++
++    if (!ca_dn)
++        /* ca_file not set, or SSL_load_client_CA_file(3) failed. */
++        ca_dn=sk_X509_NAME_new_null();
++
++    /* client CA list initialization from directory */
++    if(section->ca_dir)
++        SSL_add_dir_cert_subjects_to_stack(ca_dn, section->ca_dir);
+ 
+ #ifndef OPENSSL_NO_ENGINE
+     /* CA and client CA list initialization with the engine */
+@@ -115,24 +140,13 @@ NOEXPORT int init_ca(SERVICE_OPTIONS *section) {
+     }
+ #endif
+ 
+-    /* client CA list initialization with the file and/or directory */
+-    if(section->ca_file)
+-        SSL_add_file_cert_subjects_to_stack(ca_dn, section->ca_file);
+-    if(section->ca_dir)
+-        SSL_add_dir_cert_subjects_to_stack(ca_dn, section->ca_dir);
+-
+     if(!sk_X509_NAME_num(ca_dn)) {
+         sk_X509_NAME_pop_free(ca_dn, X509_NAME_free);
+         return 1; /* FAILED */
+     }
+ 
+-    if(section->option.client) {
+-        print_CA_list("Configured trusted server CA", ca_dn);
+-        sk_X509_NAME_pop_free(ca_dn, X509_NAME_free);
+-    } else { /* only set the client CA list on the server */
+-        print_CA_list("Configured trusted client CA", ca_dn);
+-        SSL_CTX_set_client_CA_list(section->ctx, ca_dn);
+-    }
++    print_CA_list("Configured trusted client CA", ca_dn);
++    SSL_CTX_set_client_CA_list(section->ctx, ca_dn);
+ 
+     return 0; /* OK */
+ }
+-- 
+2.45.2
+

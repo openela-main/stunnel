@@ -10,7 +10,7 @@
 Summary: A TLS-encrypting socket wrapper
 Name: stunnel
 Version: 5.71
-Release: 1%{?dist}
+Release: 2%{?dist}
 License: GPLv2
 URL: https://www.stunnel.org/
 Source0: https://www.stunnel.org/downloads/stunnel-%{version}.tar.gz
@@ -30,6 +30,7 @@ Patch1: stunnel-5.61-systemd-service.patch
 Patch3: stunnel-5.69-system-ciphers.patch
 Patch5: stunnel-5.69-default-tls-version.patch
 Patch6: stunnel-5.56-curves-doc-update.patch
+Patch7: stunnel-5.72-speed-up-loading-client-CA-list.patch
 # util-linux is needed for rename
 BuildRequires: make
 BuildRequires: gcc
@@ -61,6 +62,7 @@ conjunction with imapd to create a TLS secure IMAP server.
 %patch3 -p1 -b .system-ciphers
 %patch5 -p1 -b .default-tls-version
 %patch6 -p1 -b .curves-doc-update
+%patch7 -p1 -b .speed-up-loading-client-CA-list
 
 # Fix the stack protector flag
 sed -i 's/-fstack-protector/-fstack-protector-strong/' configure
@@ -139,6 +141,12 @@ fi
 %systemd_postun_with_restart %{name}.service
 
 %changelog
+* Thu Aug 01 2024 Clemens Lang <cllang@redhat.com> - 5.71-2
+- Speed up loading client CA list from CAfile
+  Resolves: RHEL-52321
+- Do not load all CAs in client mode to allow continued use of BEGIN TRUSTED CERTIFICATE format
+  Resolves: RHEL-52317
+
 * Thu Oct 05 2023 Clemens Lang <cllang@redhat.com> - 5.71-1
 - New upstream release 5.71
   Resolves: RHEL-2468
